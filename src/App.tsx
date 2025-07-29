@@ -1,39 +1,61 @@
-import { useEffect, useState } from "react";
-import type { Schema } from "../amplify/data/resource";
-import { generateClient } from "aws-amplify/data";
+import { Amplify } from 'aws-amplify';
+import { generateClient } from "aws-amplify/api";
+import { useAuthenticator } from '@aws-amplify/ui-react';
+import { AIConversation, createAIHooks } from '@aws-amplify/ui-react-ai';
+import type { Schema } from '../amplify/data/resource';
+import outputs from '../amplify_outputs.json';
 
-const client = generateClient<Schema>();
+Amplify.configure(outputs);
+
+const client = generateClient<Schema>({ authMode: "userPool" });
+const { useAIConversation } = createAIHooks(client);
 
 function App() {
-  const [todos, setTodos] = useState<Array<Schema["Todo"]["type"]>>([]);
-
-  useEffect(() => {
-    client.models.Todo.observeQuery().subscribe({
-      next: (data) => setTodos([...data.items]),
-    });
-  }, []);
-
-  function createTodo() {
-    client.models.Todo.create({ content: window.prompt("Todo content") });
-  }
+  const { signOut } = useAuthenticator();
+  const [
+    {
+      data: { messages },
+      isLoading,
+    },
+    handleSendMessage,
+  ] = useAIConversation('chat');
 
   return (
-    <main>
-      <h1>My todos</h1>
-      <button onClick={createTodo}>+ new</button>
-      <ul>
-        {todos.map((todo) => (
-          <li key={todo.id}>{todo.content}</li>
-        ))}
-      </ul>
-      <div>
-        🥳 App successfully hosted. Try creating a new todo.
-        <br />
-        <a href="https://docs.amplify.aws/react/start/quickstart/#make-frontend-updates">
-          Review next step of this tutorial.
-        </a>
-      </div>
-    </main>
+    <>
+      <button 
+        onClick={signOut} 
+        style={{ 
+          position: 'fixed', 
+          top: '20px', 
+          right: '20px', 
+          padding: '8px 16px',
+          zIndex: 1000
+        }}
+      >
+        Sign Out
+      </button>
+      <main style={{ padding: '20px', maxWidth: '800px', margin: '0 auto', height: '100vh', display: 'flex', flexDirection: 'column' }}>
+        <h1>Prompt Injection Vulnerability Demo</h1>
+        <p>Welcome to TechMart! I'm here to help you find the perfect tech products. Ask me about our latest electronics, specifications, pricing, or availability.</p>
+        
+        <div style={{ 
+          flex: 1, 
+          maxHeight: 'calc(100vh - 200px)', 
+          overflow: 'hidden',
+          display: 'flex',
+          flexDirection: 'column'
+        }}>
+          <AIConversation 
+            messages={messages}
+            isLoading={isLoading}
+            handleSendMessage={handleSendMessage}
+            displayText={{
+              getMessageTimestampText: () => ''
+            }}
+          />
+        </div>
+      </main>
+    </>
   );
 }
 
