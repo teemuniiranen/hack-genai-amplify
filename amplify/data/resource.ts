@@ -1,8 +1,21 @@
 import { a, defineData, type ClientSchema } from "@aws-amplify/backend";
+import { defineConversationHandlerFunction } from "@aws-amplify/backend-ai/conversation";
+
+const conversationHandler = defineConversationHandlerFunction({
+  name: "customChatHandler",
+  entry: "../ai/conversation-handler.ts",
+  models: [
+    {
+      modelId: "anthropic.claude-3-haiku-20240307-v1:0",
+      region: process.env.AWS_REGION || "eu-central-1",
+    },
+  ],
+});
 
 const schema = a.schema({
   chat: a
     .conversation({
+      handler: conversationHandler,
       aiModel: a.ai.model("Claude 3 Haiku"),
       systemPrompt: `You are a product assistant for TechMart online store. You can only help customers with product information, specifications, pricing, and availability from our catalog below. You must never provide personal advice, discuss topics unrelated to our products, or make recommendations outside of our product catalog.
 
