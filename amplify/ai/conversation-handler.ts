@@ -3,6 +3,7 @@ import {
   BedrockRuntimeClient,
   ConverseStreamCommand,
   GuardrailStreamProcessingMode,
+  GuardrailTrace,
 } from "@aws-sdk/client-bedrock-runtime";
 
 const bedrockClient = new BedrockRuntimeClient({
@@ -376,6 +377,7 @@ export const handler = async (event: any) => {
             guardrailIdentifier: GUARDRAIL_ID,
             guardrailVersion: GUARDRAIL_VERSION,
             streamProcessingMode: GuardrailStreamProcessingMode.ASYNC,
+            trace: GuardrailTrace.ENABLED_FULL,
           },
         }),
       }),
@@ -387,8 +389,14 @@ export const handler = async (event: any) => {
       let deltaIndex = 0;
       let stopReason = "";
       let lastBlockIndex = 0;
+      let guardrailTrace: any = null;
 
       for await (const chunk of response.stream) {
+        // Capture guardrail trace data from metadata chunk
+        if (chunk.metadata && (chunk.metadata as any).trace) {
+          guardrailTrace = (chunk.metadata as any).trace;
+        }
+
         if (chunk.contentBlockDelta?.delta?.text) {
           const deltaText = chunk.contentBlockDelta.delta.text;
           accumulatedContent += deltaText;
@@ -401,7 +409,6 @@ export const handler = async (event: any) => {
             accumulatedTurnContent: [{ text: accumulatedContent }],
           });
         } else if (chunk.contentBlockStop) {
-          // Send block completion signal
           await responseSender.sendResponseChunk({
             conversationId: event.conversationId,
             associatedUserMessageId: event.currentMessageId,
@@ -415,6 +422,17 @@ export const handler = async (event: any) => {
         }
       }
 
+      // Log guardrail intervention summary
+      if (stopReason === "guardrail_intervened") {
+        console.log({
+          conversationId: event.conversationId,
+          messageId: event.currentMessageId,
+          stopReason,
+          timestamp: new Date().toISOString(),
+          guardrailTrace,
+        });
+      }
+
       // Send final completion signal
       await responseSender.sendResponseChunk({
         conversationId: event.conversationId,
@@ -424,16 +442,8 @@ export const handler = async (event: any) => {
         accumulatedTurnContent: [{ text: accumulatedContent }],
       });
     } else {
-      let fullResponse = "";
-      if (response.stream) {
-        for await (const chunk of response.stream) {
-          if (chunk.contentBlockDelta?.delta?.text) {
-            fullResponse += chunk.contentBlockDelta.delta.text;
-          }
-        }
-      }
       await responseSender.sendResponse({
-        content: [{ text: fullResponse || "No response generated" }],
+        content: [{ text: "No response generated" }],
       });
     }
   } catch (error) {
