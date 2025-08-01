@@ -377,7 +377,7 @@ export const handler = async (event: any) => {
             guardrailIdentifier: GUARDRAIL_ID,
             guardrailVersion: GUARDRAIL_VERSION,
             streamProcessingMode: GuardrailStreamProcessingMode.ASYNC,
-            trace: GuardrailTrace.ENABLED_FULL,
+            trace: GuardrailTrace.ENABLED,
           },
         }),
       }),
@@ -409,13 +409,16 @@ export const handler = async (event: any) => {
             accumulatedTurnContent: [{ text: accumulatedContent }],
           });
         } else if (chunk.contentBlockStop) {
-          await responseSender.sendResponseChunk({
-            conversationId: event.conversationId,
-            associatedUserMessageId: event.currentMessageId,
-            contentBlockIndex: 0,
-            contentBlockDoneAtIndex: Math.max(0, deltaIndex - 1),
-            accumulatedTurnContent: [{ text: accumulatedContent }],
-          });
+          // Skip block completion for guardrail error messages to prevent duplicates
+          if (!accumulatedContent.includes("blocked by our content policy")) {
+            await responseSender.sendResponseChunk({
+              conversationId: event.conversationId,
+              associatedUserMessageId: event.currentMessageId,
+              contentBlockIndex: 0,
+              contentBlockDoneAtIndex: Math.max(0, deltaIndex - 1),
+              accumulatedTurnContent: [{ text: accumulatedContent }],
+            });
+          }
           lastBlockIndex = 0;
         } else if (chunk.messageStop) {
           stopReason = chunk.messageStop.stopReason || "end_turn";
