@@ -383,13 +383,13 @@ export const handler = async (event: any) => {
       }),
     );
 
-    // Process response
+    // Process response (simplified approach without contentBlockStop handling)
     if (event.streamResponse && response.stream) {
       let accumulatedContent = "";
       let deltaIndex = 0;
       let stopReason = "";
-      let lastBlockIndex = 0;
       let guardrailTrace: any = null;
+      let hasContent = false;
 
       for await (const chunk of response.stream) {
         // Capture guardrail trace data from metadata chunk
@@ -397,9 +397,19 @@ export const handler = async (event: any) => {
           guardrailTrace = (chunk.metadata as any).trace;
         }
 
+        if (chunk.messageStop) {
+          stopReason = chunk.messageStop.stopReason || "end_turn";
+        }
+
+        // Skip sending any content if guardrails will intervene
+        if (stopReason === "guardrail_intervened") {
+          continue;
+        }
+
         if (chunk.contentBlockDelta?.delta?.text) {
           const deltaText = chunk.contentBlockDelta.delta.text;
           accumulatedContent += deltaText;
+          hasContent = true;
           await responseSender.sendResponseChunk({
             conversationId: event.conversationId,
             associatedUserMessageId: event.currentMessageId,
@@ -408,24 +418,21 @@ export const handler = async (event: any) => {
             contentBlockDeltaIndex: deltaIndex++,
             accumulatedTurnContent: [{ text: accumulatedContent }],
           });
-        } else if (chunk.contentBlockStop) {
-          // Skip block completion for guardrail error messages to prevent duplicates
-          if (!accumulatedContent.includes("blocked by our content policy")) {
-            await responseSender.sendResponseChunk({
-              conversationId: event.conversationId,
-              associatedUserMessageId: event.currentMessageId,
-              contentBlockIndex: 0,
-              contentBlockDoneAtIndex: Math.max(0, deltaIndex - 1),
-              accumulatedTurnContent: [{ text: accumulatedContent }],
-            });
-          }
-          lastBlockIndex = 0;
-        } else if (chunk.messageStop) {
-          stopReason = chunk.messageStop.stopReason || "end_turn";
         }
       }
 
-      // Log guardrail intervention summary
+      // Only send completion signal if content was generated (not blocked)
+      if (hasContent) {
+        await responseSender.sendResponseChunk({
+          conversationId: event.conversationId,
+          associatedUserMessageId: event.currentMessageId,
+          contentBlockIndex: 0,
+          stopReason,
+          accumulatedTurnContent: [{ text: accumulatedContent }],
+        });
+      }
+
+      // Handle guardrail intervention
       if (stopReason === "guardrail_intervened") {
         console.log({
           conversationId: event.conversationId,
@@ -434,16 +441,25 @@ export const handler = async (event: any) => {
           timestamp: new Date().toISOString(),
           guardrailTrace,
         });
-      }
 
-      // Send final completion signal
-      await responseSender.sendResponseChunk({
-        conversationId: event.conversationId,
-        associatedUserMessageId: event.currentMessageId,
-        contentBlockIndex: lastBlockIndex,
-        stopReason,
-        accumulatedTurnContent: [{ text: accumulatedContent }],
-      });
+        // Delete the user message that was blocked
+        try {
+          await graphqlExecutor.executeGraphql({
+            query: `
+              mutation DeleteConversationMessageChat($input: DeleteConversationMessageChatInput!) {
+                deleteConversationMessageChat(input: $input) {
+                  id
+                }
+              }
+            `,
+            variables: { input: { id: event.currentMessageId } },
+          });
+        } catch (deleteError) {
+          console.error("Failed to delete blocked message:", deleteError);
+        }
+
+        return;
+      }
     } else {
       await responseSender.sendResponse({
         content: [{ text: "No response generated" }],
